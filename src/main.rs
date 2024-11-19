@@ -1,5 +1,5 @@
-use ndarray::prelude::*;
 use mnist::{Mnist, MnistBuilder};
+use ndarray::prelude::*;
 
 fn main() {
     let mnist = MnistBuilder::new()
@@ -10,7 +10,14 @@ fn main() {
 
     let training_images = mnist.trn_img;
     let training_labels = mnist.trn_lbl;
-    let train_images_array = Array2::from_shape_vec((28 * 28, 60_000), training_images.into_iter().map(|x| x as f64 / 255.0).collect()).unwrap();
+    let train_images_array = Array2::from_shape_vec(
+        (28 * 28, 60_000),
+        training_images
+            .into_iter()
+            .map(|x| x as f64 / 255.0)
+            .collect(),
+    )
+    .unwrap();
     let train_labels_array = Array1::from_shape_vec(60_000, training_labels).unwrap();
     let nn = NeuralNetwork::new(28 * 28, 10, vec![100, 50]);
     let mut sum = 0.;
@@ -18,17 +25,16 @@ fn main() {
         let image = train_images_array.column(i).to_owned();
         let label = train_labels_array[i];
         let prediction = nn.predict(&image);
-        let result = prediction.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap();
+        let result = prediction
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap();
         if label == result.0 as u8 {
             sum += 1.;
         }
     }
-
-    
-
-
 }
-
 
 struct Layer {
     weights: Array2<f64>,
@@ -37,8 +43,12 @@ struct Layer {
 
 impl Layer {
     fn new(input_nodes: usize, output_nodes: usize) -> Layer {
-        let weights_array = (0..input_nodes * output_nodes).map(|_| rand::random::<f64>()).collect::<Vec<f64>>();
-        let biases_array = (0..output_nodes).map(|_| rand::random::<f64>()).collect::<Vec<f64>>();
+        let weights_array = (0..input_nodes * output_nodes)
+            .map(|_| rand::random::<f64>())
+            .collect::<Vec<f64>>();
+        let biases_array = (0..output_nodes)
+            .map(|_| rand::random::<f64>())
+            .collect::<Vec<f64>>();
         Layer {
             weights: Array2::from_shape_vec((input_nodes, output_nodes), weights_array).unwrap(),
             biases: Array1::from_shape_vec(output_nodes, biases_array).unwrap(),
@@ -58,7 +68,8 @@ struct NeuralNetwork {
 
 impl NeuralNetwork {
     fn new<L>(inputs: usize, outputs: usize, hidden_layers: L) -> NeuralNetwork
-    where L: IntoIterator<Item=usize>
+    where
+        L: IntoIterator<Item = usize>,
     {
         let mut last_layer_size = inputs;
         let mut layers = Vec::new();
