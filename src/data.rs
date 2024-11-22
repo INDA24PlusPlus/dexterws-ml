@@ -1,4 +1,4 @@
-use mnist::{MnistBuilder};
+use mnist::MnistBuilder;
 use ndarray::Array2;
 
 pub struct MnistData {
@@ -22,17 +22,13 @@ fn vec_to_array_lbl(vec: Vec<u8>, size: usize) -> Array2<f64> {
 }
 
 impl MnistData {
-
     pub fn new() -> Self {
-        let mnist = MnistBuilder::new()
-            .label_format_digit()
-            .finalize();
+        let mnist = MnistBuilder::new().label_format_digit().finalize();
 
         let trn_img = mnist.trn_img;
         let trn_lbl = mnist.trn_lbl;
         let tst_img = mnist.tst_img;
         let tst_lbl = mnist.tst_lbl;
-
 
         let trn_img = vec_to_array_img(trn_img, 60_000);
         let trn_lbl = vec_to_array_lbl(trn_lbl, 60_000);
@@ -45,6 +41,5 @@ impl MnistData {
             tst_img,
             tst_lbl,
         }
-
     }
 }

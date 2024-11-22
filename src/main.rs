@@ -2,7 +2,6 @@ use ndarray::prelude::*;
 
 mod data;
 
-
 fn main() {
     let data = data::MnistData::new();
 
@@ -15,7 +14,11 @@ fn main() {
     println!("Accuracy: {}%", accuracy * 100.);
 }
 
-fn create_batch(inputs: &Array2<f64>, labels: &Array2<f64>, batch_size: usize) -> Vec<(Array2<f64>, Array2<f64>)> {
+fn create_batch(
+    inputs: &Array2<f64>,
+    labels: &Array2<f64>,
+    batch_size: usize,
+) -> Vec<(Array2<f64>, Array2<f64>)> {
     let mut batches = Vec::new();
     for i in 0..inputs.len_of(Axis(0)) / batch_size {
         let start = i * batch_size;
@@ -37,12 +40,8 @@ pub enum Activator {
 impl Activator {
     fn activate(&self, data: &Array2<f64>) -> Array2<f64> {
         match self {
-            Activator::Sigmoid => {
-                data.map(|x| sigmoid(*x))
-            }
-            Activator::ReLU => {
-                data.map(|x| relu(*x))
-            }
+            Activator::Sigmoid => data.map(|x| sigmoid(*x)),
+            Activator::ReLU => data.map(|x| relu(*x)),
             Activator::Softmax => {
                 let mut res = Array2::zeros(data.dim());
                 for (i, row) in data.outer_iter().enumerate() {
@@ -60,16 +59,12 @@ impl Activator {
 
     fn derivative(&self, errors: &Array2<f64>, data: &Array2<f64>) -> Array2<f64> {
         match self {
-            Activator::Sigmoid => {
-                errors * data.map(|x| sigmoid_derivative(*x))
-            }
+            Activator::Sigmoid => errors * data.map(|x| sigmoid_derivative(*x)),
             Activator::ReLU => {
                 let res = errors * data.map(|x| relu_derivative(*x));
                 res
             }
-            Activator::Softmax => {
-                errors.clone()
-            }
+            Activator::Softmax => errors.clone(),
         }
     }
 }
@@ -81,7 +76,7 @@ pub enum LayerKind {
     Dense {
         weights: Array2<f64>,
         biases: Array1<f64>,
-    }
+    },
 }
 
 impl From<Activator> for LayerKind {
@@ -116,9 +111,7 @@ impl LayerKind {
 
     fn forward(&self, inputs: &Array2<f64>) -> Array2<f64> {
         match self {
-            LayerKind::Activation { activator } => {
-                activator.activate(inputs)
-            }
+            LayerKind::Activation { activator } => activator.activate(inputs),
             LayerKind::Dense { weights, biases } => {
                 let res = inputs.dot(weights) + biases;
                 res
@@ -196,7 +189,7 @@ impl NeuralNetwork {
             layers.push(Layer::new(Activator::ReLU));
             last_layer_size = layer_size;
         }
-        
+
         // Create output layer
         layers.push(Layer::new((last_layer_size, outputs)));
         layers.push(Layer::new(Activator::Softmax));
@@ -233,7 +226,13 @@ impl NeuralNetwork {
         self.backward(&predicted, 0.1);
     }
 
-    fn train_batch(&mut self, inputs: &Array2<f64>, labels: &Array2<f64>, batch_size: usize, epochs: usize) {
+    fn train_batch(
+        &mut self,
+        inputs: &Array2<f64>,
+        labels: &Array2<f64>,
+        batch_size: usize,
+        epochs: usize,
+    ) {
         for e in 0..epochs {
             println!("Epoch: {}", e);
             let batches = create_batch(inputs, labels, batch_size);
@@ -253,8 +252,18 @@ impl NeuralNetwork {
         for (inputs, labels) in &test_batches {
             let predicted = self.predict(inputs);
             for (p, l) in predicted.outer_iter().zip(labels.outer_iter()) {
-                let p = p.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap().0;
-                let l = l.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap().0;
+                let p = p
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .unwrap()
+                    .0;
+                let l = l
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .unwrap()
+                    .0;
                 if p == l {
                     correct += 1;
                 }
@@ -264,7 +273,6 @@ impl NeuralNetwork {
         let accuracy = correct as f64 / total as f64;
         return accuracy;
     }
-
 }
 
 /// sigmoid(x) = 1 / (1 + e^(-x))
