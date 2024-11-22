@@ -1,57 +1,32 @@
-use core::error;
-
-use mnist::{Mnist, MnistBuilder};
 use ndarray::prelude::*;
 
-fn main() {
-    let mnist = MnistBuilder::new()
-        .label_format_digit()
-        .training_set_length(60_000)
-        .base_path("data")
-        .finalize();
+mod data;
 
-    let training_images = mnist.trn_img;
-    let training_labels = mnist.trn_lbl;
-    let train_images_array = Array2::from_shape_vec(
-        (28 * 28, 60_000),
-        training_images
-            .into_iter()
-            .map(|x| x as f64 / 255.0)
-            .collect(),
-    )
-    .unwrap();
-    let train_labels_array = Array1::from_shape_vec(60_000, training_labels).unwrap();
-    let mut nn = NeuralNetwork::new(28 * 28, 10, vec![16, 16]);
-    let first_hidden_layer = &nn.layers[0];
+
+fn main() {
+    let data = data::MnistData::new();
+
+    let mut nn = NeuralNetwork::new(28 * 28, 10, vec![100, 50]);
+    let batch_size = 64;
     println!("Training...");
-    for epoch in 0..2 {
-        for i in 0..1000 {
-            let img = train_images_array.column(i).to_owned();
-            let label = train_labels_array[i];
-            nn.train(&img, label);
-        }
-    }
-    let test_images = mnist.tst_img;
-    let test_labels = mnist.tst_lbl;
-    let test_images_array = Array2::from_shape_vec(
-        (28 * 28, 10_000),
-        test_images.into_iter().map(|x| x as f64 / 255.0).collect(),
-    )
-    .unwrap();
-    let test_labels_array = Array1::from_shape_vec(10_000, test_labels).unwrap();
-    let mut correct = 0;
+    nn.train_batch(&data.trn_img, &data.trn_lbl, batch_size, 10);
     println!("Testing...");
-    for i in 0..10_000 {
-        let img = test_images_array.column(i).to_owned();
-        let label = test_labels_array[i];
-        let predicted = nn.predict(&img);
-        let max = predicted.iter().enumerate().max_by(|x, y| x.1.partial_cmp(y.1).unwrap()).unwrap().0;
-        if max == label as usize {
-            correct += 1;
-        }
-    }
-    println!("Accuracy: {}", correct as f64 / 10_000.0);
+    let accuracy = nn.test(&data.tst_img, &data.tst_lbl);
+    println!("Accuracy: {}%", accuracy * 100.);
 }
+
+fn create_batch(inputs: &Array2<f64>, labels: &Array2<f64>, batch_size: usize) -> Vec<(Array2<f64>, Array2<f64>)> {
+    let mut batches = Vec::new();
+    for i in 0..inputs.len_of(Axis(0)) / batch_size {
+        let start = i * batch_size;
+        let end = (i + 1) * batch_size;
+        let inputs = inputs.slice(s![start..end, ..]).to_owned();
+        let labels = labels.slice(s![start..end, ..]).to_owned();
+        batches.push((inputs, labels));
+    }
+    batches
+}
+
 #[derive(Debug)]
 pub enum Activator {
     Sigmoid,
@@ -60,7 +35,7 @@ pub enum Activator {
 }
 
 impl Activator {
-    fn activate(&self, data: &Array1<f64>) -> Array1<f64> {
+    fn activate(&self, data: &Array2<f64>) -> Array2<f64> {
         match self {
             Activator::Sigmoid => {
                 data.map(|x| sigmoid(*x))
@@ -69,22 +44,31 @@ impl Activator {
                 data.map(|x| relu(*x))
             }
             Activator::Softmax => {
-                let sum = data.iter().map(|x| x.exp()).sum::<f64>();
-                data.map(|x| x.exp() / sum)
+                let mut res = Array2::zeros(data.dim());
+                for (i, row) in data.outer_iter().enumerate() {
+                    res.row_mut(i).assign({
+                        let max = row.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                        let exp = row.map(|x| (x - max).exp());
+                        let sum = exp.sum();
+                        &(exp / sum)
+                    });
+                }
+                res
             }
         }
     }
 
-    fn derivative(&self, data: &Array1<f64>) -> Array1<f64> {
+    fn derivative(&self, errors: &Array2<f64>, data: &Array2<f64>) -> Array2<f64> {
         match self {
             Activator::Sigmoid => {
-                data.map(|x| sigmoid_derivative(*x))
+                errors * data.map(|x| sigmoid_derivative(*x))
             }
             Activator::ReLU => {
-                data.map(|x| relu_derivative(*x))
+                let res = errors * data.map(|x| relu_derivative(*x));
+                res
             }
             Activator::Softmax => {
-                unimplemented!()
+                errors.clone()
             }
         }
     }
@@ -115,13 +99,13 @@ impl From<(usize, usize)> for LayerKind {
 impl LayerKind {
     fn new_dense(input_nodes: usize, output_nodes: usize) -> LayerKind {
         let weights_array = (0..input_nodes * output_nodes)
-            .map(|_| rand::random::<f64>())
+            .map(|_| 2. * rand::random::<f64>() - 1.)
             .collect::<Vec<f64>>();
         let biases_array = (0..output_nodes)
-            .map(|_| rand::random::<f64>())
+            .map(|_| 2. * rand::random::<f64>() - 1.)
             .collect::<Vec<f64>>();
         LayerKind::Dense {
-            weights: Array2::from_shape_vec((output_nodes, input_nodes), weights_array).unwrap(),
+            weights: Array2::from_shape_vec((input_nodes, output_nodes), weights_array).unwrap(),
             biases: Array1::from_shape_vec(output_nodes, biases_array).unwrap(),
         }
     }
@@ -130,21 +114,21 @@ impl LayerKind {
         LayerKind::Activation { activator }
     }
 
-    fn forward(&self, inputs: &Array1<f64>) -> Array1<f64> {
+    fn forward(&self, inputs: &Array2<f64>) -> Array2<f64> {
         match self {
             LayerKind::Activation { activator } => {
                 activator.activate(inputs)
             }
             LayerKind::Dense { weights, biases } => {
-                weights.dot(inputs) + biases
+                let res = inputs.dot(weights) + biases;
+                res
             }
         }
     }
 }
 
 pub struct Layer {
-    inputs: Array1<f64>,
-    outputs: Array1<f64>,
+    inputs: Array2<f64>,
     kind: LayerKind,
 }
 
@@ -154,27 +138,23 @@ impl Layer {
         K: Into<LayerKind>,
     {
         Layer {
-            inputs: Array1::zeros(0),
-            outputs: Array1::zeros(0),
+            inputs: Array2::zeros((0, 0)),
             kind: k.into(),
         }
     }
 
-    fn forward(&self, inputs: &Array1<f64>) -> Array1<f64> {
+    fn forward(&self, inputs: &Array2<f64>) -> Array2<f64> {
         self.kind.forward(inputs)
     }
 
-    fn forward_train(&mut self, inputs: &Array1<f64>) -> Array1<f64> {
+    fn forward_train(&mut self, inputs: &Array2<f64>) -> Array2<f64> {
         //println!("Kind: {:?}", self.kind);
         self.inputs = inputs.clone();
         //println!("Input dims: {:?}", self.inputs.dim());
-        self.outputs = self.forward(inputs);
-        //println!("Output dims: {:?}", self.outputs.dim());
-        //println!("___");
-        self.outputs.clone()
+        self.forward(inputs)
     }
 
-    fn backward(&mut self, errors: Array1<f64>, learning_rate: f64) -> Array1<f64> {
+    fn backward(&mut self, errors: Array2<f64>, learning_rate: f64) -> Array2<f64> {
         match &mut self.kind {
             LayerKind::Activation { activator } => {
                 //println!("====");
@@ -182,26 +162,17 @@ impl Layer {
                 //println!("Inputs dim: {:?}", self.inputs.dim());
                 //println!("Outputs dim: {:?}", self.outputs.dim());
                 //println!("====");
-                let derivative = activator.derivative(&errors);
-                derivative
+                let d_x = activator.derivative(&errors, &self.inputs);
+                d_x
             }
             LayerKind::Dense { weights, biases } => {
-                // Convert inputs to 2D array
-                //println!("pre_inputs_dim: {:?}", self.inputs.dim());
-                //println!("pre_errors_dim: {:?}", errors.dim());
-                let inputs = self.inputs.to_shape((self.inputs.len(), 1)).unwrap();
-                let errors = errors.to_shape((errors.len(), 1)).unwrap();
-                let d_w = errors.dot(&inputs.t());
-                let d_x = errors.t().dot(weights);
-                //println!("weights_dim: {:?}", weights.dim());
-                //println!("d_w_dim: {:?}", d_w.dim());
-                //println!("inputs_dim: {:?}", inputs.dim());
-                //println!("errors_dim: {:?}", errors.dim());
-                let new_weights = weights.clone() - learning_rate * d_w;
-                *weights = new_weights;
-                let d_x = d_x.to_shape(d_x.len()).unwrap().to_owned();
-                //println!("d_x_dim: {:?}", d_x.dim());
-                //println!("___");
+                let d_w = self.inputs.t().dot(&errors);
+                let d_b = errors.sum_axis(Axis(0));
+                let d_x = errors.dot(&weights.t());
+                //println!("d_w: {:?}", d_w);
+                //std::thread::sleep(std::time::Duration::from_secs(1));
+                *weights = weights.clone() - learning_rate * d_w;
+                *biases = biases.clone() - learning_rate * d_b;
                 d_x
             }
         }
@@ -222,17 +193,17 @@ impl NeuralNetwork {
         // Create hidden layers
         for layer_size in hidden_layers {
             layers.push(Layer::new((last_layer_size, layer_size)));
-            layers.push(Layer::new(Activator::Sigmoid));
+            layers.push(Layer::new(Activator::ReLU));
             last_layer_size = layer_size;
         }
         
         // Create output layer
         layers.push(Layer::new((last_layer_size, outputs)));
-        layers.push(Layer::new(Activator::Sigmoid));
+        layers.push(Layer::new(Activator::Softmax));
         NeuralNetwork { layers }
     }
 
-    fn predict(&self, inputs: &Array1<f64>) -> Array1<f64> {
+    fn predict(&self, inputs: &Array2<f64>) -> Array2<f64> {
         let mut outputs = inputs.clone();
         for layer in &self.layers {
             outputs = layer.forward(&outputs);
@@ -240,28 +211,58 @@ impl NeuralNetwork {
         outputs
     }
 
-    fn forward(&mut self, inputs: &Array1<f64>) -> Array1<f64> {
-        let mut outputs = vec![inputs.clone()];
+    fn forward(&mut self, inputs: &Array2<f64>) -> Array2<f64> {
+        let mut outputs = inputs.clone();
         for layer in &mut self.layers {
-            outputs.push(layer.forward_train(&outputs.last().unwrap()));
+            outputs = layer.forward_train(&outputs);
         }
-        outputs.pop().unwrap()
+        outputs
     }
 
-    fn backward(&mut self, errors: &Array1<f64>, learning_rate: f64) {
+    fn backward(&mut self, errors: &Array2<f64>, learning_rate: f64) {
         let mut errors = errors.clone();
+        let mut i = 0;
         for layer in self.layers.iter_mut().rev() {
+            i += 1;
             errors = layer.backward(errors, learning_rate);
         }
     }
 
-    fn train(&mut self, inputs: &Array1<f64>, actual: u8) {
+    fn train(&mut self, inputs: &Array2<f64>, actual: u8) {
         let predicted = self.forward(inputs);
-        let errors = cost_derivative(&predicted, actual);
-        self.backward(&errors, 0.1);
+        self.backward(&predicted, 0.1);
     }
 
-    fn train_batch(&mut self, inputs: &Array2<f64>, actuals: &Array1<u8>) {
+    fn train_batch(&mut self, inputs: &Array2<f64>, labels: &Array2<f64>, batch_size: usize, epochs: usize) {
+        for e in 0..epochs {
+            println!("Epoch: {}", e);
+            let batches = create_batch(inputs, labels, batch_size);
+            for (inputs, labels) in &batches {
+                let predicted = self.forward(inputs);
+                let err = predicted - labels.to_owned();
+                self.backward(&err, 0.001);
+            }
+        }
+    }
+
+    fn test(&mut self, inputs: &Array2<f64>, labels: &Array2<f64>) -> f64 {
+        // Could just put the entire thing in, but that takes 1 billion memory :p
+        let test_batches = create_batch(inputs, labels, 500);
+        let mut correct = 0;
+        let mut total = 0;
+        for (inputs, labels) in &test_batches {
+            let predicted = self.predict(inputs);
+            for (p, l) in predicted.outer_iter().zip(labels.outer_iter()) {
+                let p = p.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap().0;
+                let l = l.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap().0;
+                if p == l {
+                    correct += 1;
+                }
+                total += 1;
+            }
+        }
+        let accuracy = correct as f64 / total as f64;
+        return accuracy;
     }
 
 }
@@ -292,14 +293,14 @@ fn relu_derivative(x: f64) -> f64 {
 }
 
 /// cost(a, b) = sum((a - b)^2)
-fn cost(predicted: &Array1<f64>, actual: u8) -> f64 {
+fn cost(predicted: &Array2<f64>, actual: u8) -> f64 {
     let mut cost = Array1::zeros(10);
     cost[actual as usize] = 1.0;
     (predicted - cost).map(|x| x.powi(2)).sum()
 }
 
 /// cost'(a, b) = a - b
-fn cost_derivative(predicted: &Array1<f64>, actual: u8) -> Array1<f64> {
+fn cost_derivative(predicted: &Array2<f64>, actual: u8) -> Array2<f64> {
     let mut cost = Array1::zeros(10);
     cost[actual as usize] = 1.0;
     predicted - cost
